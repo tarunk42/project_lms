@@ -1,0 +1,17 @@
+openai-agents
+openai-agents[viz]
+openai
+numpy
+matplotlib
+jupyter 
+notebook
+streamlit
+ddgs
+pydantic
+bs4
+requests
+rich
+python-dotenv
+fastapi
+uvicorn
+pytest
