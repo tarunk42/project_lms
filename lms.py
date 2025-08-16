@@ -304,7 +304,7 @@ class Orchestrator:
     ) -> Tuple[str, str]:
         """Returns (title, markdown). Builds once and caches to disk."""
         index = self.store.load_index(course_id)
-        syllabus = DetailedSyllabus.model_validate(index["syllabus"])
+        syllabus = DetailedSyllabus.model_validate(index["syllabus"])  # Ensure syllabus is defined
         module = syllabus.outline[module_idx]
         title = module.subtopics[subtopic_idx]
 
@@ -414,7 +414,7 @@ if __name__ == "__main__":
     course_id = orch.save_course(approved, detailed)
     console.print(f"[green]Saved course:[/green] [bold]{course_id}[/bold]  (stored under ./content/{course_id})")
 
-    # 5) Quick actions for materials
+    # 5) Actions for materials
     if Confirm.ask("Build all study materials now?", default=False):
         index = orch.store.load_index(course_id)
         syllabus = DetailedSyllabus.model_validate(index["syllabus"])
@@ -432,3 +432,92 @@ if __name__ == "__main__":
         title, md = orch.get_or_build_lesson(course_id, mm-1, ss-1)
         console.rule(f"[bold]{title}[/bold]")
         console.print(Markdown(md))
+    # 5c) HTML → PDF via Playwright (simple & robust)
+    from pathlib import Path
+
+    pdf_output_path = f"./content/{course_id}/{course_id}.pdf"
+    ask_label = "Create a PDF booklet for this coursework now?"
+    if Path(pdf_output_path).exists():
+        ask_label = "PDF already exists. Re-generate it?"
+
+    def _build_booklet_markdown(orch, course_id) -> str:
+        index = orch.store.load_index(course_id)
+        syllabus = DetailedSyllabus.model_validate(index["syllabus"])
+        parts = []
+        parts.append(f"# {index['topic']} — {index['level'].title()}\n")
+        if index.get("goal"):
+            parts.append(f"**Goal:** {index['goal']}\n")
+        for m_idx, mod in enumerate(syllabus.outline):
+            parts.append("\n\n<div class='pagebreak'></div>\n")
+            parts.append(f"## {mod.title}\n")
+            for s_idx, _ in enumerate(mod.subtopics):
+                title, md = orch.get_or_build_lesson(course_id, m_idx, s_idx)
+                parts.append(f"\n### {title}\n\n{md}\n")
+        return "\n".join(parts)
+
+    def _markdown_to_html_book(md_text: str) -> str:
+        from markdown2 import markdown
+        body = markdown(
+            md_text,
+            extras=["fenced-code-blocks","tables","strike","target-blank-links"]
+        )
+        css = """
+        @page { size: A4; margin: 15mm; }
+        body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "DejaVu Sans", Arial, sans-serif; line-height: 1.45; }
+        h1, h2, h3 { page-break-after: avoid; }
+        .pagebreak { page-break-before: always; }
+        pre, code { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 11px; }
+        pre { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; background: #f7f7f7; padding: 8px; border-radius: 6px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 6px; vertical-align: top; }
+        """
+        return f"<!doctype html><html><head><meta charset='utf-8'><style>{css}</style></head><body>{body}</body></html>"
+
+    # Export to PDF using Playwright
+    def export_booklet_playwright(orch, course_id, out_path: str):
+        html_doc = _markdown_to_html_book(_build_booklet_markdown(orch, course_id))
+
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.set_content(html_doc, wait_until="load")
+
+            # Inject KaTeX (fast, no LaTeX toolchain needed)
+            page.add_style_tag(url="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css")
+            page.add_script_tag(url="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js")
+            page.add_script_tag(url="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js")
+
+            # Render math: $...$, $$...$$, \(...\), \[...\]
+            page.evaluate(r"""
+                renderMathInElement(document.body, {
+                    delimiters: [
+                        {left: "$$", right: "$$", display: true},
+                        {left: "$",  right: "$",  display: false},
+                        {left: "\\[", right: "\\]", display: true},
+                        {left: "\\(", right: "\\)", display: false}
+                    ],
+                    ignoredTags: ["script","noscript","style","textarea","pre","code"],
+                    throwOnError: false
+                });
+            """)
+
+            # Ensure KaTeX output exists before printing
+            page.wait_for_function("document.querySelector('.katex, .katex-display') !== null")
+
+            page.pdf(
+                path=out_path,
+                format="A4",
+                print_background=True,
+                margin={"top":"15mm","right":"15mm","bottom":"15mm","left":"15mm"}
+            )
+            browser.close()
+
+
+    # Ask to generate PDF
+    if Confirm.ask(ask_label, default=False):
+        try:
+            export_booklet_playwright(orch, course_id, pdf_output_path)
+            console.print(f"[bold green]PDF generated:[/bold green] {pdf_output_path}")
+        except Exception as e:
+            console.print(f"[bold red]PDF generation failed:[/bold red] {e}")
