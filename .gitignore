@@ -26,3 +26,14 @@ content/
 
 # web files
 web_test/
+static/
+logs/
+
+# Reference materials
+reference_materials/
+manuals/
+
+# Ignore specific files
+config_example.py
+env_test.py
+lms.py

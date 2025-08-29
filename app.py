@@ -261,3 +261,5 @@ async def log_requests(request, call_next):
     return response
 
 nest_asyncio.apply()
+
+# uvicorn app:app --reload --host 0.0.0.0 --port 8000
