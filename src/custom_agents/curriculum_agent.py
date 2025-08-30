@@ -1,5 +1,5 @@
 from agents import Agent
-from models.curriculum import Curriculum
+from src.models.curriculum import Curriculum
 
 curriculum_agent = Agent(
     name="Curriculum Planner",

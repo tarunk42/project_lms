@@ -4,7 +4,7 @@ import os
 # Add the src directory to PYTHONPATH dynamically
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import Literal
 from src.orchestrator import Orchestrator
@@ -191,57 +191,23 @@ async def load_existing_course(course_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/materials/build/{course_id}")
-async def build_materials(course_id: str):
-    """Endpoint to build all study materials and return complete course content."""
+async def build_materials(course_id: str, concurrency: int = Query(6, ge=1, le=16)):
+    """
+    Concurrent material build with bounded parallelism.
+    Use ?concurrency=8 to tune based on your rate limits.
+    """
     try:
-        print(f"🔨 Building materials for course: {course_id}")
+        print(f"� Concurrent build for {course_id} (concurrency={concurrency})")
+        result = await orch.build_all_materials_concurrent(course_id, concurrency=concurrency)
         
-        # Load the course structure from saved index
-        index = orch.store.load_index(course_id)
-        from src.models.curriculum import DetailedSyllabus
-        syllabus = DetailedSyllabus.model_validate(index["syllabus"])
-        total = sum(len(m.subtopics) for m in syllabus.outline)
+        print(f"🎉 Concurrent build completed! {result['completed']}/{result['total']} lessons generated")
+        if result['failures']:
+            print(f"⚠️ {len(result['failures'])} failures occurred")
         
-        print(f"📊 Building {total} lessons across {len(syllabus.outline)} modules")
-        
-        # Build all materials
-        materials = []
-        completed = 0
-        
-        for m_idx, mod in enumerate(syllabus.outline):
-            print(f"📖 Processing Module {m_idx + 1}: {mod.title}")
-            module_materials = []
-            for s_idx, subtopic in enumerate(mod.subtopics):
-                print(f"  📝 Creating lesson {completed + 1}/{total}: {subtopic[:50]}...")
-                title, content = orch.get_or_build_lesson(course_id, m_idx, s_idx)
-                module_materials.append({
-                    "subtopic_index": s_idx,
-                    "title": title,
-                    "content": content,
-                    "subtopic_description": subtopic
-                })
-                completed += 1
-                print(f"  ✅ Completed {completed}/{total}")
-            
-            materials.append({
-                "module_index": m_idx,
-                "module_title": mod.title,
-                "subtopics": module_materials
-            })
-            print(f"✅ Module {m_idx + 1} completed ({len(module_materials)} lessons)")
-        
-        print(f"🎉 All materials generated! {total} lessons created.")
-        
-        return {
-            "course_id": course_id,
-            "materials": materials,
-            "total": total,
-            "completed": completed,
-            "status": "All materials generated successfully"
-        }
+        return result
         
     except Exception as e:
-        print(f"❌ Error building materials: {str(e)}")
+        print(f"❌ Error building materials: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/materials/subtopic/{course_id}/{module_number}/{subtopic_number}")

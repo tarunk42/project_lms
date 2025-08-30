@@ -1,5 +1,10 @@
 import sys
 import os
+import asyncio
+import nest_asyncio
+
+# Apply nest_asyncio to handle nested event loops
+nest_asyncio.apply()
 
 # Add the src directory to PYTHONPATH dynamically
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -9,7 +14,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
-from src.orchestrator import Orchestrator
+from src import Orchestrator
 
 console = Console()
 
@@ -40,7 +45,31 @@ def _cli_feedback(curriculum, review):
         user_change = Prompt.ask("Describe your change request (1–2 sentences)", default="")
         return user_change or review.revision_instructions
 
-if __name__ == "__main__":
+async def build_materials_concurrent(orch, course_id, detailed):
+    """Build materials concurrently with progress updates"""
+    console.print("[bold yellow]Building materials concurrently...[/bold yellow]")
+    
+    total = sum(len(m.subtopics) for m in detailed.outline)
+    console.print(f"📊 Building {total} lessons across {len(detailed.outline)} modules")
+    
+    # Get concurrency setting from user
+    concurrency = int(Prompt.ask("Concurrency level (1-16)", default="6"))
+    
+    # Use the concurrent builder
+    result = await orch.build_all_materials_concurrent(course_id, concurrency=concurrency)
+    
+    # Show results
+    console.print(f"[bold green]✅ Build completed![/bold green]")
+    console.print(f"Total lessons: {result['total']}")
+    console.print(f"Successfully built: {result['completed']}")
+    if result['failures']:
+        console.print(f"[bold red]Failures: {len(result['failures'])}[/bold red]")
+        for failure in result['failures']:
+            console.print(f"  ❌ {failure}")
+    else:
+        console.print("[bold green]No failures![/bold green]")
+
+async def main():
     console.clear()
     console.print(Panel("[bold bright_magenta]=== Step 1: Welcome User ===[/bold bright_magenta]"))
     console.print("[bold]=== Learning Platform Orchestrator (MVP, Extended) ===[/bold]")
@@ -90,19 +119,14 @@ if __name__ == "__main__":
     # 5) Quick actions for materials
     console.print(Panel("[bold bright_magenta]=== Step 6: Quick Actions ===[/bold bright_magenta]"))
     if Confirm.ask("Build all study materials now?", default=False):
-        index = orch.store.load_index(course_id)
-        syllabus = detailed
-        total = sum(len(m.subtopics) for m in syllabus.outline)
-        done = 0
-        for m_idx, mod in enumerate(syllabus.outline):
-            for s_idx, _ in enumerate(mod.subtopics):
-                title, _ = orch.get_or_build_lesson(course_id, m_idx, s_idx)
-                done += 1
-                console.print(f"[green]Built[/green] {done}/{total}: [bold]{mod.title}[/bold] → {title}")
-        console.print("[bold green]All materials generated.[/bold green]")
+        # Use async concurrent building
+        await build_materials_concurrent(orch, course_id, detailed)
     elif Confirm.ask("Open a subtopic now?", default=True):
         mm = int(Prompt.ask("Module number (mm, 1-based)"))
         ss = int(Prompt.ask("Subtopic number (ss, 1-based)"))
         title, md = orch.get_or_build_lesson(course_id, mm - 1, ss - 1)
         console.rule(f"[bold]{title}[/bold]")
         console.print(Markdown(md))
+
+if __name__ == "__main__":
+    asyncio.run(main())

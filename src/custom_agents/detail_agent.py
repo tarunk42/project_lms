@@ -1,5 +1,5 @@
 from agents import Agent
-from models.curriculum import DetailedSyllabus
+from src.models.curriculum import DetailedSyllabus
 
 detail_agent = Agent(
     name="Detail Drafter",

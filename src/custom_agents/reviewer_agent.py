@@ -1,5 +1,5 @@
 from agents import Agent
-from models.curriculum import Review
+from src.models.curriculum import Review
 
 reviewer_agent = Agent(
     name="Curriculum Reviewer",

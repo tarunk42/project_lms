@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from .helpers import slugify
+from src.utils.helpers import slugify
 
 class FileContentStore:
     """

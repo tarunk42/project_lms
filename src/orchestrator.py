@@ -1,15 +1,14 @@
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
-from models.curriculum import Curriculum, Review, DetailedSyllabus
-from utils.file_store import FileContentStore
-from utils.helpers import slugify, sha256_text, short
-from custom_agents.curriculum_agent import curriculum_agent
-from custom_agents.reviewer_agent import reviewer_agent
-from custom_agents.detail_agent import detail_agent
-from custom_agents.material_agent import material_agent
+from typing import Callable, Optional, Tuple, Dict, Any, List
+from src.models import Curriculum, Review, DetailedSyllabus
+from src.utils import FileContentStore, slugify, sha256_text, short
+from src.custom_agents import curriculum_agent, reviewer_agent, detail_agent, material_agent
 from agents import Runner, RunConfig, ModelSettings
 from datetime import datetime
 from pathlib import Path
+import asyncio
+import random
+import nest_asyncio
 
 # Initialize CONTENT_DIR properly
 CONTENT_DIR = Path("content")
@@ -21,6 +20,9 @@ class Orchestrator:
     temperature: float = 0.2
 
     def __post_init__(self):
+        # Apply nest_asyncio to handle nested event loops
+        nest_asyncio.apply()
+        
         self.curriculum_agent = curriculum_agent
         self.reviewer_agent = reviewer_agent
         self.detail_agent = detail_agent
@@ -169,3 +171,132 @@ class Orchestrator:
 
     def _course_id(self, topic: str, syllabus_hash: str) -> str:
         return f"{slugify(topic)}-{short(syllabus_hash)}"
+
+    async def _run_material_async(self, prompt: str):
+        """
+        Async wrapper around the Agents SDK.
+        Uses native async if available; otherwise offloads run_sync to a thread.
+        """
+        if hasattr(Runner, "run") and callable(getattr(Runner, "run")):
+            # Preferred: async SDK
+            res = await Runner.run(self.material_agent, prompt, run_config=self._run_config)
+        else:
+            # Fallback: don't block the loop
+            res = await asyncio.to_thread(
+                Runner.run_sync, self.material_agent, prompt, self._run_config
+            )
+        return res.final_output
+
+    async def generate_material_markdown_async(
+        self,
+        syllabus: DetailedSyllabus,
+        module_idx: int,
+        subtopic_idx: int,
+    ) -> str:
+        module = syllabus.outline[module_idx]
+        subtopic = module.subtopics[subtopic_idx]
+        prompt = (
+            f"Generate complete study material for this subtopic in STRICT MARKDOWN ONLY.\n\n"
+            f"Course Topic: {syllabus.topic}\n"
+            f"Module: {module.title}\n"
+            f"Subtopic: {subtopic}\n"
+        )
+        return await self._run_material_async(prompt)
+
+    async def get_or_build_lesson_async(
+        self, course_id: str, syllabus: DetailedSyllabus, module_idx: int, subtopic_idx: int
+    ) -> Tuple[str, str]:
+        """
+        Async/idempotent: returns (title, markdown) for one subtopic.
+        File IO is offloaded so we don't block the event loop.
+        """
+        module = syllabus.outline[module_idx]
+        subtopic = module.subtopics[subtopic_idx]
+
+        # Use the FileContentStore methods for consistent path handling
+        has_lesson = await asyncio.to_thread(self.store.has_lesson, course_id, module_idx, subtopic_idx, subtopic)
+        if has_lesson:
+            md = await asyncio.to_thread(self.store.read_lesson, course_id, module_idx, subtopic_idx, subtopic)
+            return subtopic, md
+
+        # Generate via LLM, then persist
+        md = await self.generate_material_markdown_async(syllabus, module_idx, subtopic_idx)
+        await asyncio.to_thread(self.store.write_lesson, course_id, module_idx, subtopic_idx, subtopic, md)
+        return subtopic, md
+
+    async def build_all_materials_concurrent(
+        self, course_id: str, concurrency: int = 6, retries: int = 2
+    ) -> Dict[str, Any]:
+        """
+        Builds ALL lessons concurrently with bounded parallelism and retries.
+        Returns the same shape your endpoint currently returns.
+        """
+        index = self.store.load_index(course_id)
+        syllabus = DetailedSyllabus.model_validate(index["syllabus"])
+
+        total = sum(len(m.subtopics) for m in syllabus.outline)
+        sem = asyncio.Semaphore(concurrency)
+
+        async def one_task(m_idx: int, s_idx: int):
+            attempt = 0
+            while True:
+                try:
+                    async with sem:
+                        title, md = await self.get_or_build_lesson_async(
+                            course_id, syllabus, m_idx, s_idx
+                        )
+                    return (m_idx, s_idx, title, md)
+                except Exception as e:
+                    attempt += 1
+                    if attempt > retries:
+                        raise
+                    # Exponential backoff + jitter
+                    await asyncio.sleep((2 ** attempt) + random.random())
+
+        tasks = [
+            asyncio.create_task(one_task(m_idx, s_idx))
+            for m_idx, mod in enumerate(syllabus.outline)
+            for s_idx, _ in enumerate(mod.subtopics)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Organize results by module
+        materials: List[Dict[str, Any]] = []
+        failures: List[str] = []
+        result_map: Dict[Tuple[int, int], Dict[str, Any]] = {}
+
+        for r in results:
+            if isinstance(r, Exception):
+                failures.append(str(r))
+                continue
+            m_idx, s_idx, title, content = r
+            result_map[(m_idx, s_idx)] = {
+                "subtopic_index": s_idx,
+                "title": title,
+                "content": content,
+                "subtopic_description": syllabus.outline[m_idx].subtopics[s_idx],
+            }
+
+        for m_idx, mod in enumerate(syllabus.outline):
+            module_materials = [
+                result_map[(m_idx, s_idx)]
+                for s_idx in range(len(mod.subtopics))
+                if (m_idx, s_idx) in result_map
+            ]
+            materials.append(
+                {
+                    "module_index": m_idx,
+                    "module_title": mod.title,
+                    "subtopics": module_materials,
+                }
+            )
+
+        completed = sum(len(m["subtopics"]) for m in materials)
+        return {
+            "course_id": course_id,
+            "materials": materials,
+            "total": total,
+            "completed": completed,
+            "failures": failures,
+            "status": "All materials generated concurrently" if not failures else "Completed with some failures",
+        }
