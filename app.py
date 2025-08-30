@@ -43,8 +43,17 @@ class FeedbackRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    """Health check endpoint."""
-    return {"message": "LMS API is running"}
+    """Root endpoint."""
+    return {"message": "LMS API is running", "version": "1.0.0"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker."""
+    return {
+        "status": "healthy",
+        "service": "LMS API",
+        "timestamp": "ok"
+    }
 
 @app.get("/debug")
 async def debug():

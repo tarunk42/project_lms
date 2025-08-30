@@ -29,6 +29,9 @@ web_test/
 static/
 logs/
 
+# Docker volumes (but keep Docker files)
+.docker-data/
+
 # Reference materials
 reference_materials/
 manuals/
@@ -37,3 +40,5 @@ manuals/
 config_example.py
 env_test.py
 lms.py
+memory_dashboard.sh
+monitor_memory.py
