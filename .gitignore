@@ -41,4 +41,15 @@ config_example.py
 env_test.py
 lms.py
 memory_dashboard.sh
+start_lms.sh
+stop_lms.sh
 monitor_memory.py
+
+# Docker files
+Dockerfile
+docker-compose.yml
+docker-compose.prod.yml
+Dockerfile.prod
+DOCKER_README.md
+docker-manage.sh
+nginx.conf
