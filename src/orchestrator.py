@@ -150,15 +150,15 @@ class Orchestrator:
 
         module = syllabus.outline[module_idx]
         subtopic = module.subtopics[subtopic_idx]
-        lesson_id = f"{course_id}/{module_idx:02d}-{subtopic_idx:02d}-{slugify(subtopic)}"
 
-        lesson_path = self.store.base / lesson_id
-        if lesson_path.exists():
-            return subtopic, lesson_path.read_text(encoding="utf-8")
+        # Use FileContentStore methods for consistent path handling
+        if self.store.has_lesson(course_id, module_idx, subtopic_idx, subtopic):
+            md = self.store.read_lesson(course_id, module_idx, subtopic_idx, subtopic)
+            return subtopic, md
 
         # Generate material if it doesn't exist
         material = self.generate_material_markdown(syllabus, module_idx, subtopic_idx)
-        lesson_path.write_text(material, encoding="utf-8")
+        self.store.write_lesson(course_id, module_idx, subtopic_idx, subtopic, material)
         return subtopic, material
 
     def _prompt_hash(self) -> str:

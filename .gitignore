@@ -17,6 +17,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
 
 # MacOS specific files
 .DS_Store
@@ -53,3 +54,5 @@ Dockerfile.prod
 DOCKER_README.md
 docker-manage.sh
 nginx.conf
+.dockerignore
+streamlit_app.py.backup

@@ -16,16 +16,16 @@ fastapi
 uvicorn
 pytest
 
-# Additional dependencies found in codebase
+
 psutil
 nest-asyncio
 trafilatura
 
-# Testing dependencies (optional but recommended)
+
 pytest-cov
 requests-mock
 httpx
 
-# Web scraping dependencies
+
 beautifulsoup4
 lxml
